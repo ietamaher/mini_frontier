@@ -1,252 +1,252 @@
-# MiniFrontier — LLM Arabe ~14.6M Paramètres
-## Architecture Llama-style • BPE 16k • RoPE • SwiGLU • Flash Attention
+# MiniFrontier — LLM Arabe classique ~14.6M paramètres
 
-> 📚 **Documentation projet** : [`CLAUDE.md`](CLAUDE.md) (contexte IA) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (détail technique) · [`docs/DECISIONS.md`](docs/DECISIONS.md) (journal des bugs résolus) · [`docs/ROADMAP.md`](docs/ROADMAP.md) (SFT & Constitutional AI à venir)
+**Architecture Llama-style** (RMSNorm · RoPE · SwiGLU · Flash-Attention) · **BPE 16k dé-vocalisé** · corpus **arabe classique pondéré** (المكتبة الشاملة).
 
----
-
-## Vue d'ensemble
-
-Un modèle de langage causal ~10M paramètres entraîné exclusivement en **arabe standard moderne (Fusha)**.  
-Architecture inspirée de LLaMA 2 / Mistral, dimensionnée pour s'entraîner sur une **RTX 3090 en moins de 2 heures**.
-
-```
-Architecture :
-  Token Embedding  (vocab_size=16k, n_embd=256)
-  ↓
-  8× FrontierBlock :
-     RMSNorm → CausalSelfAttention (RoPE, Flash Attention)
-     RMSNorm → SwiGLU FFN
-  ↓
-  RMSNorm → LM Head (vocab_size=16k)
-```
+> Modèle de langage causal pré-entraîné *from scratch*, **mono-langue arabe**, spécialisé sur les sciences de la langue (نحو، صرف، لغة، معاجم، بلاغة، أدب، شعر، عروض). Objectif : maîtriser toute la chaîne d'un LLM (corpus → tokenizer → pré-entraînement → évaluation) à petite échelle sur matériel grand public.
+>
+> 📚 [`CLAUDE.md`](CLAUDE.md) · [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/DECISIONS.md`](docs/DECISIONS.md) · [`docs/ROADMAP.md`](docs/ROADMAP.md)
 
 ---
 
-## Structure du projet
+## 1. Vue d'ensemble
 
 ```
-mini_frontier/
-├── config.py           # Hyperparamètres centralisés (ModelConfig, TrainConfig)
-├── tokenizer_arabic.py # BPE 16k arabe + normalisation Fusha
-├── data_pipeline.py    # Corpus → memmap binaire (train.bin / val.bin)
-├── model.py            # Architecture (RMSNorm, RoPE, SwiGLU, FlashAttn)
-├── train.py            # Boucle d'entraînement production-ready
-├── generate.py         # Inférence + mode interactif
-├── generate_data.py    # Génération de données synthétiques (vLLM / Ollama)
-├── requirements.txt
-│
-├── data/
-│   ├── raw/            # 📂 Mettre vos fichiers .txt arabes bruts ici
-│   ├── normalized/     # (auto-généré) textes normalisés
-│   ├── train.bin       # (auto-généré) corpus tokenisé train
-│   └── val.bin         # (auto-généré) corpus tokenisé validation
-│
-├── tokenizer/
-│   └── arabic_bpe_16k.json   # (auto-généré) tokenizer BPE
-│
-├── checkpoints/
-│   ├── ckpt_best.pt    # Meilleur modèle (val loss minimale)
-│   └── ckpt_stepXXXXX.pt
-│
-└── logs/
-    ├── train.log
-    └── metrics.jsonl
+tokens ─► Token Embedding (16000 × 256)
+       ─► 8 × FrontierBlock :
+              RMSNorm ─► CausalSelfAttention (RoPE + Flash-Attention)
+              RMSNorm ─► SwiGLU FFN (256 → 704 → 256)
+       ─► RMSNorm ─► LM Head (256 × 16000, sans weight-tying)
 ```
+
+| Hyperparamètre | Valeur |
+|---|---|
+| `vocab_size` | 16 000 |
+| `n_embd` (d_model) | 256 |
+| `n_layer` | 8 |
+| `n_head` | 8 → `head_dim` = 32 |
+| `hidden_dim` (SwiGLU) | 704 ≈ 8⁄3 × 256, multiple de 64 |
+| `block_size` (contexte) | 512 |
+| `rope_base` | 10 000 |
+| biais / weight-tying | aucun (post-LLaMA) |
+| **Paramètres totaux** | **14.62 M** (10.52 M hors embedding) |
+
+### Décompte exact des paramètres
+
+Le total n'est pas magique, il se dérive directement de la config :
+
+```
+Embedding  tok_emb     = vocab × d            = 16000 × 256          = 4 096 000
+LM head    lm_head     = d × vocab            = 256 × 16000          = 4 096 000   (non tié)
+
+Par bloc (× 8) :
+  Attention  Wq,Wk,Wv,Wo = 4 × d²            = 4 × 256²             =   262 144
+  SwiGLU     W1,W3       = 2 × d × hidden     = 2 × 256 × 704        =   360 448
+  SwiGLU     W2          =     hidden × d     =     704 × 256        =   180 224
+  2 × RMSNorm            = 2 × d              = 2 × 256              =       512
+  ───────────────────────────────────────────────────────────────────────────
+  sous-total bloc                                                    =   803 328
+  × 8 blocs                                                          = 6 426 624
+
+RMSNorm final            = d                                         =       256
+═══════════════════════════════════════════════════════════════════════════════
+TOTAL = 4 096 000 + 4 096 000 + 6 426 624 + 256                      = 14 618 880
+```
+
+Les embeddings (entrée + sortie) pèsent **8.19 M** soit 56 % des poids — typique d'un petit modèle à vocabulaire relativement large. Le « cœur » Transformer ne fait que **10.52 M** (chiffre rapporté hors embedding).
 
 ---
 
-## Pipeline complet — Étape par étape
+## 2. Le corpus — arabe classique pondéré
 
-### Étape 0 — Installation
+Le corpus est préparé **dans un dépôt séparé** (`arabic-corpus`, extraction depuis une installation locale de المكتبة الشاملة) et consommé ici via un manifeste pondéré. Les sources sont du **texte numérique propre** (pas d'OCR), faithful-transcrites.
+
+- **911 livres**, 7 catégories Shamela (sciences de la langue).
+- Chaque livre porte un poids de mélange `mix_weight` dans `staging/corpus_manifest.csv`.
+
+### Pondération du mélange (mix weights)
+
+L'idée : sur-représenter le **cœur grammatical** (نحو، لغة، عروض، شعر, peu volumineux mais ciblés) et sous-représenter l'أدب/معاجم (volumineux mais hors-cible). Pour un livre de `T_raw` tokens et de poids `w` :
+
+```
+T_effectif = T_raw × w          (tokens « vus » après pondération)
+part(cat)  = Σ T_eff(cat) / Σ T_eff(tous)
+```
+
+La pondération est réalisée **par répétition de documents** (pas de duplication de fichiers texte permanente) : un livre de poids `w` est inclus `⌊w⌋` fois en entier, plus une fraction `w − ⌊w⌋` de ses lignes.
+
+| Cat | Catégorie | Poids | Tokens bruts | Tokens effectifs | Part effective |
+|----:|-----------|------:|-------------:|-----------------:|---------------:|
+| 31 | النحو والصرف | 2.57 | 21.5 M | 55.2 M | **45.5 %** |
+| 32 | الأدب | 0.45 | 59.4 M | 26.7 M | 22.1 % |
+| 30 | الغريب والمعاجم | 0.56 | 33.0 M | 18.5 M | 15.2 % |
+| 29 | كتب اللغة | 2.57 | 3.3 M | 8.6 M | 7.1 % |
+| 35 | البلاغة | 1.83 | 4.7 M | 8.6 M | 7.1 % |
+| 34 | الشعر ودواوينه | 3.80 | 0.8 M | 3.1 M | 2.5 % |
+| 33 | العروض والقوافي | 4.00 | 0.15 M | 0.58 M | 0.5 % |
+
+> L'أدب passe de 48 % du corpus brut à 22 % effectif ; le نحو monte de 17 % à 45 %. C'est tout l'objet du mélange.
+
+### Découpage train/val **au niveau livre** (zéro fuite)
+
+Le split N'EST PAS une coupe en queue du flux concaténé (qui ferait fuiter des copies d'un même livre sur-pondéré des deux côtés). À la place :
+
+1. ~5 % des **livres** de chaque catégorie sont réservés à la validation (échantillonnage déterministe sur la distribution de taille, gros dictionnaires/références **protégés** = gardés en train).
+2. La pondération `mix_weight` n'est appliquée **qu'aux livres d'entraînement**.
+3. Les livres de validation sont encodés **une seule fois (1×)**.
+
+→ **0 livre commun** entre train et val : la val loss est un vrai signal de généralisation.
+
+| | Tokens | Livres |
+|---|------:|------:|
+| `train.bin` (pondéré) | **175 918 892** | 866 |
+| `val.bin` (1×, held-out) | **4 231 363** | 45 |
+
+---
+
+## 3. Le tokenizer — BPE 16k dé-vocalisé
+
+BPE 16 000 entraîné **sur le flux pondéré** (le grammatical est donc sur-représenté dans les merges → tokenisation plus dense des termes ciblés). Normalisation appliquée *avant* l'entraînement ET à l'inférence (cohérence stricte) :
+
+- suppression des **tashkīl** (harakāt) ;
+- unification **alif** (أ إ آ ٱ → ا), **yā/alif maqṣūra** (ى → ي), **wāw hamza** (ؤ → و) ;
+- retrait des caractères non-arabes hors ponctuation utile.
+
+**Efficacité mesurée** (tokens / mot, plus bas = mieux) :
+
+| Texte | tokens/mot | chars/token |
+|---|---:|---:|
+| Grammaire (held-out) | **1.42** | 3.19 |
+| Prose générale (أدب) | 1.63 | — |
+
+Les termes grammaticaux clés sont des **tokens uniques** : `منصوب`, `مرفوع`, `مجرور`, `الفاعل`, `إعراب`, `النحو`, `الصرف` → 1 token chacun.
+
+> ⚠️ La normalisation strippe aussi les marqueurs coraniques `﴿…﴾` (bloc Presentation-Forms). Conséquence connue : le modèle apprend la *forme* des citations coraniques sans pouvoir les distinguer → voir §7 (limites) et la roadmap (masquage des spans coraniques).
+
+---
+
+## 4. Entraînement
+
+### Batch effectif & volume de tokens
+
+```
+batch_effectif = micro_batch × grad_accum × block_size
+               = 16 × 8 × 512 = 65 536 tokens / step
+
+tokens_total   = batch_effectif × max_iters
+               = 65 536 × 10 000 = 655 360 000 tokens  (≈ 655 M)
+
+epochs         = tokens_total / corpus_train
+               = 655.36 M / 175.92 M ≈ 3.73 époques
+```
+
+Ratio **tokens/params ≈ 655 M / 14.6 M ≈ 45** : régime « compute-rich » (au-delà de l'optimum Chinchilla ~20×), assumé pour un petit modèle — la répétition à ~3.7 époques reste dans la zone sûre.
+
+### Learning-rate : cosine avec warmup
+
+```
+        ┌ lr_peak · t/warmup                                   si t < warmup
+lr(t) = ┤ min_lr + ½(lr_peak − min_lr)(1 + cos(π·p))           sinon, p = (t−warmup)/(decay−warmup)
+        └ min_lr                                                si t ≥ decay
+```
+
+| | Valeur | Pourquoi |
+|---|---|---|
+| `lr_peak` | 1.5e-4 | abaissé vs 3e-4 (nanoGPT) car batch 65k ≪ 500k → gradients plus bruités |
+| `min_lr` | 1.5e-5 | = peak/10 |
+| `warmup_iters` | 400 | montée douce, évite la divergence post-warmup |
+| `weight_decay` / `grad_clip` | 0.1 / 1.0 | sur les poids 2D uniquement (pas RMSNorm/biais) |
+| `betas` | (0.9, 0.95) | AdamW fused |
+
+### Précision adaptée au GPU (automatique)
+
+- **Ampere+** (RTX 3090/5060 Ti, A100) → **bfloat16**, pas de GradScaler.
+- **Turing/Volta** (T4, V100) → **float16 + GradScaler** (plage dynamique étroite du fp16 → overflow sans scaling).
+- CPU → float32.
+
+`torch >= 2.3` requis (API `torch.amp.GradScaler`). Tokens stockés en **uint16** (vocab 16k < 65535 → 2 octets/token).
+
+### Évaluation par catégorie + val loss pondérée
+
+La val loss « plate » (moyenne par token) est dominée par أدب/معاجم — justement les catégories *sous*-pondérées. On rapporte donc :
+
+1. la val loss **séparée par catégorie** (`val_cat{N}.bin`), et
+2. une val loss **pondérée par le mix d'entraînement** :
+
+```
+L_pondérée = ( Σ_c  w_c · L_c ) / Z      avec  Z = Σ_c w_c
+w = { نحو 0.45, أدب 0.22, معاجم 0.15, لغة 0.07, بلاغة 0.07, شعر 0.025 }
+Z = 0.985   (عروض absent de la val → renormalisation)
+```
+
+Le **meilleur checkpoint** (`ckpt_best.pt`) suit `L_pondérée`, pas la moyenne plate → on optimise ce qui compte.
+
+---
+
+## 5. Pipeline de bout en bout
 
 ```bash
-# Créer un environnement virtuel
-python -m venv .venv && source .venv/bin/activate
-
-# PyTorch CUDA 12.1 (RTX 3090 / RTX 5060 Ti)
+# 0. Dépendances (torch>=2.3 ; cu121 conseillé)
 pip install torch --index-url https://download.pytorch.org/whl/cu121
-
-# Dépendances
 pip install -r requirements.txt
-```
 
----
+# 1. Construire le flux pondéré dé-vocalisé (depuis arabic-corpus/staging)
+python data_pipeline.py --prepare_shamela --held_out <book_id>
 
-### Étape 1 — Préparer le corpus brut arabe
+# 2. (Ré)entraîner le tokenizer BPE 16k sur ce flux
+#    → tokenizer/arabic_bpe_16k.json
+#    (cf. data_pipeline / tokenizer_arabic)
 
-Placez vos fichiers `.txt` arabes dans `data/raw/`.
+# 3. Encoder : split AU NIVEAU LIVRE → train.bin / val.bin (uint16)
+python data_pipeline.py --encode_shamela
 
-**Sources recommandées :**
+# 4. Émettre les bins de validation PAR catégorie
+python data_pipeline.py --emit_val_cat_bins
 
-| Source | Volume estimé | Qualité |
-|--------|--------------|---------|
-| [Hindawi Books](https://www.hindawi.org/books/) | ~2 Go | ⭐⭐⭐⭐⭐ |
-| [Wikipédia Arabe (filtré)](https://huggingface.co/datasets/wikipedia) | ~1 Go | ⭐⭐⭐⭐ |
-| [Cosmopedia (arabe)](https://huggingface.co/datasets/HuggingFaceTB/cosmopedia) | ~500 Mo | ⭐⭐⭐⭐⭐ |
-| Synthétique (generate_data.py) | illimité | ⭐⭐⭐⭐⭐ |
-
-**Cible : 4–5 Go de texte brut ≈ 1 milliard de tokens après normalisation.**
-
----
-
-### Étape 2 — Générer des données synthétiques (optionnel)
-
-Utilisez votre Qwen3:27B local pour générer des histoires TinyStories arabes :
-
-```bash
-# Via Ollama (maktab-dev-ollama ou instance locale)
-python generate_data.py \
-    --n 10000 \
-    --backend ollama \
-    --host 192.168.1.190 \
-    --port 8085 \
-    --model qwen3:27b \
-    --output data/raw/synth_stories_ar.txt \
-    --workers 4
-
-# Via vLLM (si servi localement)
-python generate_data.py \
-    --n 50000 \
-    --backend vllm \
-    --host 192.168.1.190 \
-    --port 8085 \
-    --model Qwen/Qwen2.5-7B-Instruct
-```
-
----
-
-### Étape 3 — Entraîner le tokenizer BPE arabe
-
-```bash
-python tokenizer_arabic.py --train --corpus_dir data/raw --vocab_size 16000
-```
-
-Ce que ça fait :
-- Normalise l'arabe (supprime les tashkeel, unifie Alif/Ya/Waw)
-- Entraîne un tokenizer BPE 16k sur votre corpus
-- Sauvegarde dans `tokenizer/arabic_bpe_16k.json`
-
-Test du tokenizer :
-```bash
-python tokenizer_arabic.py --test "الكلب يركض في الحديقة"
-```
-
----
-
-### Étape 4 — Préparer le corpus binaire
-
-```bash
-python data_pipeline.py --prepare --corpus_dir data/raw
-
-# Vérifier les stats
-python data_pipeline.py --stats
-```
-
-Génère `data/train.bin` et `data/val.bin` (format numpy uint16, chargement memmap).
-
----
-
-### Étape 5 — Entraîner le modèle
-
-```bash
+# 5. Entraîner (config par défaut : 65 536 tok/step × 10 000)
 python train.py
-```
+#    reprise :  python train.py --resume
+#    Colab T4 :  réduire si OOM → --batch_size 8 --block_size 256
 
-Options utiles :
-```bash
-# Entraînement court pour test (1000 steps)
-python train.py --max_iters 1000
-
-# Reprendre depuis un checkpoint
-python train.py --resume
-python train.py --resume --ckpt checkpoints/ckpt_step05000.pt
-
-# Ajuster la taille de batch si OOM
-python train.py --batch_size 8
-
-# Sans torch.compile (debug)
-python train.py --no_compile
-```
-
-**Monitoring en temps réel :**
-```bash
-tail -f logs/train.log
-```
-
----
-
-### Étape 6 — Générer du texte
-
-```bash
-# Génération simple
-python generate.py --prompt "كان يا ما كان"
-
-# Mode interactif (REPL)
+# 6. Générer
+python generate.py --prompt "الفاعل مرفوع وعلامة رفعه" --temperature 0.7
 python generate.py --interactive
-
-# Paramètres de génération
-python generate.py \
-    --prompt "السماء" \
-    --temperature 0.7 \
-    --top_p 0.9 \
-    --max_tokens 300
 ```
 
----
-
-## Estimation des performances
-
-### Sur votre setup (RTX 3090 24 GB)
-
-| Paramètre | Valeur |
-|-----------|--------|
-| Tokens/step | 65 536 (16 × 8 × 512) |
-| Vitesse estimée | ~350 000 tok/s |
-| 10 000 steps | ~30 min |
-| 1 milliard de tokens | ~48 min |
-| Val loss attendue (10M, Fusha) | ~2.5–3.0 |
-
-### Sur Google Colab T4
-
-| Paramètre | Valeur |
-|-----------|--------|
-| Vitesse estimée | ~80 000 tok/s (4× plus lent) |
-| 1 milliard de tokens | ~3.5–4 heures |
-| Recommandation | Réduire block_size à 256, batch_size à 8 |
+> Le chemin du corpus (`ARABIC_CORPUS_DIR`) et tous les poids/chemins sont centralisés dans **`config.py`**. Les `.bin`, `.txt` de flux, checkpoints et tokenizer sont **git-ignorés** (volumineux / régénérables) — voir §6.
 
 ---
 
-## Comparaison avec le code original
+## 6. Matériel & artefacts
 
-| Aspect | Code original | MiniFrontier v2 |
-|--------|---------------|-----------------|
-| Tokenizer | tiktoken (mauvais pour l'arabe) | BPE 16k arabe custom |
-| Position encoding | RoPE (ok) | RoPE avec cache optimisé |
-| Normalisation arabe | ❌ aucune | ✅ Tashkeel + Alif + Ya |
-| Dataset | Shakespeare/TinyStories | Corpus arabe natif |
-| Checkpointing | ❌ absent | ✅ meilleur val loss |
-| Génération | Basic sampling | Top-K + Top-P + Rep penalty |
-| Mixed precision | BF16 ok | BF16 + autocast propre |
-| torch.compile | ❌ | ✅ (+15% vitesse) |
-| Monitoring | print basique | JSON metrics + MFU |
-| Reprise training | ❌ | ✅ --resume |
+| Machine | Rôle | Précision |
+|---|---|---|
+| Laptop GTX 1650 (4 Go) | dev / smoke-test uniquement | float16 |
+| Station RTX 3090 / 5060 Ti | entraînement réel | bfloat16 |
+| Google Colab T4 | entraînement réel | float16 + GradScaler, ~120k tok/s |
+
+Un run complet (10k steps) ≈ **30 min sur RTX 3090**, **~90 min sur T4**.
+
+**Non versionné** (`.gitignore`) : `data/*.bin`, `data/shamela/*.txt` (~2 Go de flux), `checkpoints/`, `logs/`, `tokenizer/*.json`. Le dépôt ne contient que le **code** ; les `.bin` se régénèrent via le pipeline §5 ou se transfèrent à part (trop gros pour la limite 100 Mo de GitHub).
 
 ---
 
-## Connexion avec votre stack
+## 7. Résultats & limites (honnêtes)
 
-- **Ollama** : `generate_data.py` appelle directement votre instance locale (Qwen3:27B)
-- **vLLM** : compatible avec le port 8085 de votre lab
-- **LXD `ai-stable`** : les scripts s'exécutent dans le container sans modification
-- **RTX 3090 + RTX 5060 Ti** : en ajoutant `CUDA_VISIBLE_DEVICES=0,1` pour multi-GPU (via DataParallel ou DDP)
+**Run T4, checkpoint `ckpt_best.pt` (step 5000)** : val loss pondérée ≈ **4.81**, en descente. Le نحو est systématiquement la catégorie de plus faible loss — la pondération fonctionne. Génération : registre grammatical fluide et correct localement (« الضمة الظاهرة على آخره »), iʿrāb bien formé, citations de références plausibles (المغني، شرح الكافية).
+
+**Limites (inhérentes à ~14.6 M params) :**
+
+1. **Pas de raisonnement, imitation de forme.** Les phrases d'analyse sont localement bien formées mais globalement non valides. Plafond de capacité — non corrigeable par plus de pré-entraînement à cette taille (lever : modèle 50–100 M+).
+2. **Effondrement répétitif à basse température** (boucles `لم يقم لم يقم…`) : augmenter `--rep_penalty` (~1.3), ou ajouter min-p / no-repeat-ngram.
+3. **Citations coraniques fabriquées** (problème de *sûreté*, prioritaire) : le modèle génère du texte coranique-like avec des références inventées, car la normalisation a effacé les marqueurs `﴿…﴾`. **Correctif v2** (dans le pipeline de données) : masquage des spans coraniques dans la loss (`ignore_index`, déjà supporté par `model.py`) ou tokens spéciaux `[QURAN]…[/QURAN]`.
 
 ---
 
-## Prochaines étapes (roadmap)
+## 8. Roadmap
 
-1. **SFT** (Supervised Fine-Tuning) — paires Q/R arabes pour l'instruct
-2. **Constitutional AI** — alignement selon vos principes
-3. **GQA** — Grouped Query Attention (extension du code actuel)
-4. **YaRN** — context extension > 512 tokens
-5. **Quantisation GGUF** — export llama.cpp pour inférence locale
+1. **Masquage des spans coraniques** (sûreté) — *prochaine étape*.
+2. **SFT** (paires instruction/réponse arabes).
+3. **Base plus grande (50–100 M)** pour une réelle compétence grammaticale.
+4. Constitutional AI / RLAIF · GQA · extension de contexte (YaRN) · export GGUF.
+
+> Note : `generate_data.py` (génération synthétique via Ollama/vLLM) reste disponible comme outil optionnel, mais n'est **pas** la source du corpus actuel (qui est Shamela).
