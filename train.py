@@ -35,7 +35,7 @@ from config import (
     VAL_EVAL_MIX, VAL_CAT_NAMES, val_cat_bin,
 )
 from model import MiniFrontierLLM
-from data_pipeline import MemmapDataset, TRAIN_BIN, VAL_BIN
+from data_pipeline import MemmapDataset, TRAIN_BIN, VAL_BIN, mask_for
 from tokenizer_arabic import ArabicTokenizer
 from config import TOKENIZER_PATH
 
@@ -245,8 +245,11 @@ def train(cfg_train: TrainConfig, cfg_model: ModelConfig, resume: bool = False,
     log.info(f"Effective batch size : {cfg_train.micro_batch_size * cfg_train.gradient_accumulation_steps * cfg_model.block_size:,} tokens/step")
 
     # ── Datasets ──────────────────────────────────────────────────────────────
-    train_ds = MemmapDataset(TRAIN_BIN, cfg_model.block_size)
-    val_ds   = MemmapDataset(VAL_BIN,   cfg_model.block_size)   # plat (référence)
+    # mask_path est passé systématiquement : MemmapDataset n'active le masquage
+    # (cibles coraniques → -1) que si le *_mask.bin existe, sinon comportement
+    # identique. Rétro-compatible avec des .bin non masqués.
+    train_ds = MemmapDataset(TRAIN_BIN, cfg_model.block_size, mask_path=mask_for(TRAIN_BIN))
+    val_ds   = MemmapDataset(VAL_BIN,   cfg_model.block_size, mask_path=mask_for(VAL_BIN))  # plat (réf.)
 
     # Val par catégorie : un dataset par val_cat{N}.bin présent sur disque.
     # Permet la val loss séparée + la val loss pondérée par le mix d'entraînement.
@@ -254,7 +257,7 @@ def train(cfg_train: TrainConfig, cfg_model: ModelConfig, resume: bool = False,
     for cat in VAL_EVAL_MIX:
         p = val_cat_bin(cat)
         if p.exists():
-            val_datasets[cat] = MemmapDataset(p, cfg_model.block_size)
+            val_datasets[cat] = MemmapDataset(p, cfg_model.block_size, mask_path=mask_for(p))
         else:
             log.warning(f"val_cat{cat}.bin absent ({p}) — catégorie exclue de l'éval. "
                         f"Lancer : python data_pipeline.py --emit_val_cat_bins")
