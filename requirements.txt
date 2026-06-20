@@ -1,0 +1,19 @@
+# MiniFrontier — Dépendances cœur (entraînement + inférence)
+# Installation : pip install -r requirements.txt
+#
+# Pour PyTorch avec CUDA (RTX 3090 / 5060 Ti / T4), préférer :
+#   pip install torch --index-url https://download.pytorch.org/whl/cu121
+# puis : pip install -r requirements.txt
+
+# ── Cœur ──────────────────────────────────────────────────────────────────────
+torch>=2.1.0          # Flash Attention (SDPA), torch.compile, AMP bf16/fp16
+tokenizers>=0.19.0    # BPE arabe (backend Rust)
+numpy>=1.26.0         # memmap binaire du corpus
+requests>=2.31.0      # appels Ollama/vLLM (génération de données)
+tqdm>=4.66.0          # barres de progression
+
+# ── Groupes optionnels (voir pyproject.toml) ──────────────────────────────────
+# Génération synthétique :  pip install -e ".[synth]"      (vllm, transformers)
+# Traitement arabe avancé : pip install -e ".[arabic]"     (camel-tools, pyarabic)
+# Monitoring :              pip install -e ".[monitoring]" (tensorboard, wandb)
+# Développement :           pip install -e ".[dev]"        (ruff, pytest)

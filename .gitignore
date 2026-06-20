@@ -1,0 +1,57 @@
+# ── Artefacts d'entraînement (JAMAIS committer) ───────────────────────────────
+data/raw/
+data/normalized/
+# flux texte pondérés (stream/train_stream/val_stream .txt, ~2 Go)
+data/shamela/
+data/*.bin
+data/*.txt
+data/*.tmp
+checkpoints/
+logs/
+tokenizer/*.json
+*.pt
+*.ckpt
+
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+.installed.cfg
+*.egg
+
+# ── Environnements virtuels ───────────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ── Secrets & config locale ───────────────────────────────────────────────────
+.env
+.env.local
+*.local
+
+# ── Outils & IDE ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+.DS_Store
+.ipynb_checkpoints/
+
+# ── Cache outils Python ───────────────────────────────────────────────────────
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ── Notes ─────────────────────────────────────────────────────────────────────
+# On garde : le code .py, les docs, requirements.txt, pyproject.toml,
+#            config.py, README.md, CLAUDE.md, docs/
+# On exclut : tout ce qui est généré (données, poids, logs).

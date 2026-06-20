@@ -1,0 +1,73 @@
+[project]
+name = "mini-frontier"
+version = "0.2.0"
+description = "LLM arabe mono-langue ~14.6M paramètres, architecture Llama-style, entraîné depuis zéro"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Maher Bouzaien" }]
+keywords = ["llm", "arabic", "transformer", "rope", "swiglu", "from-scratch"]
+
+dependencies = [
+    "torch>=2.1.0",
+    "tokenizers>=0.19.0",
+    "numpy>=1.26.0",
+    "requests>=2.31.0",
+    "tqdm>=4.66.0",
+]
+
+[project.optional-dependencies]
+# Génération de données synthétiques (serveur LLM local)
+synth = [
+    "vllm>=0.4.0",
+    "transformers>=4.40.0",
+    "accelerate>=0.29.0",
+]
+# Traitement avancé de l'arabe
+arabic = [
+    "camel-tools>=1.5.0",
+    "pyarabic>=0.6.14",
+]
+# Monitoring
+monitoring = [
+    "tensorboard>=2.16.0",
+    "wandb>=0.16.0",
+]
+# Développement
+dev = [
+    "ruff>=0.4.0",
+    "pytest>=8.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/USERNAME/mini-frontier"
+
+# ── Ruff (linter + formatter) ─────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# E/W = pycodestyle, F = pyflakes, I = isort, UP = pyupgrade, B = bugbear
+select = ["E", "W", "F", "I", "UP", "B"]
+ignore = [
+    "E501",  # ligne trop longue (on tolère pour les tableaux alignés/commentaires)
+    "E741",  # noms de variables ambigus (ex: 'l' dans decode)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["config", "model", "tokenizer_arabic", "data_pipeline"]
+
+# ── Pytest ────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-v"
+
+# ── Build ─────────────────────────────────────────────────────────────────────
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["config", "model", "tokenizer_arabic", "data_pipeline", "train", "generate", "generate_data"]
