@@ -553,8 +553,14 @@ class MemmapDataset:
     """
     Chargement zero-copy depuis un fichier binaire numpy.
     np.memmap ne charge rien en RAM — le kernel OS gère le paging.
+
+    Masquage optionnel (loss masking) : si `mask_path` pointe sur un .bin uint8
+    aligné token-à-token (1 = apprendre, 0 = ignorer, ex. spans coraniques),
+    les cibles Y correspondantes sont mises à -1 → ignorées par cross_entropy
+    (ignore_index=-1). X (contexte) reste inchangé : le modèle LIT le span mais
+    n'est pas entraîné à le GÉNÉRER. Sans mask_path → comportement identique.
     """
-    def __init__(self, bin_path: Path, block_size: int):
+    def __init__(self, bin_path: Path, block_size: int, mask_path: Path = None):
         if not bin_path.exists():
             raise FileNotFoundError(
                 f"Fichier binaire introuvable : {bin_path}\n"
@@ -563,7 +569,21 @@ class MemmapDataset:
         self.data       = np.memmap(str(bin_path), dtype=np.uint16, mode="r")
         self.block_size = block_size
         self.n_tokens   = len(self.data)
-        log.info(f"Dataset chargé : {self.n_tokens:,} tokens depuis {bin_path.name}")
+
+        self.mask = None
+        if mask_path is not None and Path(mask_path).exists():
+            self.mask = np.memmap(str(mask_path), dtype=np.uint8, mode="r")
+            if len(self.mask) != self.n_tokens:
+                raise ValueError(
+                    f"Désalignement mask/tokens : {len(self.mask)} ≠ {self.n_tokens} "
+                    f"({mask_path.name} vs {bin_path.name})"
+                )
+            n_masked = int((np.asarray(self.mask) == 0).sum())
+            log.info(f"Dataset chargé : {self.n_tokens:,} tokens depuis {bin_path.name} "
+                     f"│ masque actif : {n_masked:,} tokens ignorés "
+                     f"({n_masked/max(self.n_tokens,1)*100:.2f}%)")
+        else:
+            log.info(f"Dataset chargé : {self.n_tokens:,} tokens depuis {bin_path.name}")
 
     def __len__(self) -> int:
         return self.n_tokens - self.block_size - 1
@@ -574,7 +594,165 @@ class MemmapDataset:
         ix = np.random.randint(0, len(self), size=(batch_size,))
         x  = np.stack([self.data[i     : i + self.block_size    ] for i in ix]).astype(np.int64)
         y  = np.stack([self.data[i + 1 : i + self.block_size + 1] for i in ix]).astype(np.int64)
+        if self.mask is not None:
+            # mask aligné sur les CIBLES (positions i+1 … i+block)
+            m = np.stack([self.mask[i + 1 : i + self.block_size + 1] for i in ix])
+            y[m == 0] = -1            # -1 = ignore_index dans model.forward
         return torch.from_numpy(x), torch.from_numpy(y)
+
+
+def mask_for(bin_path: Path) -> Path:
+    """train.bin → train_mask.bin ; val_cat31.bin → val_cat31_mask.bin."""
+    p = Path(bin_path)
+    return p.with_name(p.stem + "_mask.bin")
+
+
+# ── Masquage des spans coraniques (loss masking) ──────────────────────────────
+# Les fichiers clean/ conservent les marqueurs ﴿…﴾ ; la normalisation les efface.
+# On détecte donc les spans AVANT normalisation, on tokenise par segments, et on
+# émet un masque uint8 parallèle (0 = span coranique → cible ignorée à la loss).
+# Seuls les versets ENTRE ﴿…﴾ sont masqués (haute précision). Le Coran cité sans
+# crochets (fréquent en grammaire) n'est pas détectable et reste non masqué.
+QURAN_SPAN_RE = re.compile(r'﴿([^﴾]*)﴾')
+
+
+def _quran_segments(line: str):
+    """Découpe une ligne brute en segments (texte, is_quran) selon ﴿…﴾."""
+    segs = []
+    pos = 0
+    for m in QURAN_SPAN_RE.finditer(line):
+        if m.start() > pos:
+            segs.append((line[pos:m.start()], False))
+        inner = m.group(1)
+        if inner:
+            segs.append((inner, True))
+        pos = m.end()
+    if pos < len(line):
+        segs.append((line[pos:], False))
+    return segs
+
+
+def _encode_chunks_masked(chunks: list, tok: ArabicTokenizer,
+                          out_bin: Path, out_mask: Path, seed: int,
+                          flush_tokens: int = 4_000_000) -> tuple:
+    """
+    Encode une liste de passes (path, fraction, cat) → (out_bin uint16,
+    out_mask uint8), avec masquage des spans coraniques. RAM-safe (flush par
+    blocs). Lignes sans Coran → encode_batch (rapide) ; lignes avec ﴿ → encode
+    par segments (préserve l'ordre). Retourne (n_tokens, n_masked).
+    """
+    random.Random(seed).shuffle(chunks)
+    out_bin.parent.mkdir(parents=True, exist_ok=True)
+
+    tok_buf, mask_buf = [], []
+    n_tokens = n_masked = 0
+    t0 = time.time()
+
+    with open(out_bin, "wb") as fb, open(out_mask, "wb") as fm:
+        def flush_buffers():
+            nonlocal tok_buf, mask_buf, n_tokens, n_masked
+            if not tok_buf:
+                return
+            arr = np.array(tok_buf, dtype=np.uint16)
+            msk = np.array(mask_buf, dtype=np.uint8)
+            arr.tofile(fb)
+            msk.tofile(fm)
+            n_tokens += len(arr)
+            n_masked += int((msk == 0).sum())
+            tok_buf, mask_buf = [], []
+
+        plain_batch = []
+        def flush_plain():
+            if not plain_batch:
+                return
+            normed = [normalize_arabic(t) for t in plain_batch]
+            for e in tok._tok.encode_batch(normed):
+                tok_buf.extend(e.ids)
+                mask_buf.extend([1] * len(e.ids))
+            plain_batch.clear()
+
+        for n, (path, fraction, cat) in enumerate(chunks, 1):
+            if fraction < 1.0:
+                total = sum(1 for _ in _content_lines(path))
+                budget = max(1, int(total * fraction))
+            else:
+                budget = None
+
+            for i, line in enumerate(_content_lines(path)):
+                if budget is not None and i >= budget:
+                    break
+                if '﴿' in line:
+                    flush_plain()                      # préserve l'ordre
+                    for seg, is_q in _quran_segments(line):
+                        norm = normalize_arabic(seg)
+                        if not norm:
+                            continue
+                        ids = tok._tok.encode(norm).ids
+                        tok_buf.extend(ids)
+                        mask_buf.extend([0 if is_q else 1] * len(ids))
+                else:
+                    plain_batch.append(line)
+                    if len(plain_batch) >= 2000:
+                        flush_plain()
+                if len(tok_buf) >= flush_tokens:
+                    flush_buffers()
+            flush_plain()
+            if n % 200 == 0:
+                log.info(f"  {n}/{len(chunks)} passes │ {n_tokens/1e6:.0f}M tokens │ "
+                         f"{time.time()-t0:.0f}s")
+        flush_plain()
+        flush_buffers()
+
+    return n_tokens, n_masked
+
+
+def prepare_shamela_split_masked(tok: ArabicTokenizer, val_frac: float = 0.05,
+                                 seed: int = SHAMELA_SHUFFLE_SEED) -> dict:
+    """
+    Comme prepare_shamela_split, mais avec MASQUAGE des spans coraniques.
+    Écrit train.bin + train_mask.bin, val.bin + val_mask.bin, et les
+    val_cat{N}.bin + val_cat{N}_mask.bin. Même sélection val déterministe.
+    """
+    index = _scan_shamela_clean()
+    rows  = _load_manifest_rows(index)
+    val_ids, sel = select_val_books(rows, val_frac=val_frac)
+    train_rows = [r for r in rows if r['bid'] not in val_ids]
+    val_rows   = [r for r in rows if r['bid'] in val_ids]
+    log.info(f"Split livre : {len(train_rows)} train / {len(val_rows)} val (0 chevauchement)")
+
+    train_chunks = []
+    for r in train_rows:
+        full = int(r['w']); frac = r['w'] - full
+        for _ in range(full):
+            train_chunks.append((r['path'], 1.0, r['cat']))
+        if frac > 1e-3:
+            train_chunks.append((r['path'], frac, r['cat']))
+    val_chunks = [(r['path'], 1.0, r['cat']) for r in val_rows]
+
+    log.info(f"Encodage MASQUÉ train ({len(train_chunks)} passes) → train.bin + train_mask.bin…")
+    n_tr, n_tr_m = _encode_chunks_masked(train_chunks, tok, TRAIN_BIN, mask_for(TRAIN_BIN), seed)
+    log.info(f"Encodage MASQUÉ val ({len(val_chunks)} livres) → val.bin + val_mask.bin…")
+    n_va, n_va_m = _encode_chunks_masked(val_chunks, tok, VAL_BIN, mask_for(VAL_BIN), seed + 1)
+
+    # val par catégorie (masqué aussi, pour cohérence de l'éval)
+    val_by_cat = defaultdict(list)
+    for r in val_rows:
+        val_by_cat[r['cat']].append(r)
+    cat_stats = {}
+    for cat in sorted(val_by_cat):
+        chunks = [(r['path'], 1.0, cat) for r in val_by_cat[cat]]
+        cb = val_cat_bin(cat)
+        nt, nm = _encode_chunks_masked(chunks, tok, cb, mask_for(cb), seed)
+        cat_stats[cat] = {"n_books": len(val_by_cat[cat]), "n_tokens": nt, "n_masked": nm}
+
+    return {
+        "n_train_tokens": n_tr, "n_train_masked": n_tr_m,
+        "n_val_tokens":   n_va, "n_val_masked":   n_va_m,
+        "n_train_books":  len(train_rows), "n_val_books": len(val_rows),
+        "selection":      sel,
+        "val_cat_stats":  cat_stats,
+        "val_ids":        sorted(val_ids),
+    }
 
 
 # ── Statistiques ─────────────────────────────────────────────────────────────
@@ -601,6 +779,9 @@ def _cli():
                         help="Tokeniser le flux Shamela → train.bin/val.bin")
     parser.add_argument("--emit_val_cat_bins", action="store_true",
                         help="Émettre val_cat{N}.bin par catégorie (éval pondérée)")
+    parser.add_argument("--encode_shamela_masked", action="store_true",
+                        help="Encoder avec masquage des spans coraniques "
+                             "(train/val/val_cat + *_mask.bin)")
     parser.add_argument("--held_out",        type=int, default=None,
                         help="book_id exclu du flux (mesure tokenizer held-out)")
     parser.add_argument("--val_book_frac",   type=float, default=0.05,
@@ -674,6 +855,25 @@ def _cli():
                   f"{v['n_tokens']:>12,}  {v['bin'].name}")
         print(f"  {'':>3}  {'TOTAL':<10} {'':>6} {total:>12,}  "
               f"(doit == val.bin : 4 231 363)")
+        return
+
+    if args.encode_shamela_masked:
+        from config import TOKENIZER_PATH, VAL_CAT_NAMES
+        tok = ArabicTokenizer(TOKENIZER_PATH)
+        r = prepare_shamela_split_masked(tok, val_frac=args.val_book_frac)
+        tr, trm = r["n_train_tokens"], r["n_train_masked"]
+        va, vam = r["n_val_tokens"],   r["n_val_masked"]
+        print("\n" + "=" * 70)
+        print("ENCODAGE MASQUÉ (spans coraniques ﴿…﴾ → cible ignorée)")
+        print("=" * 70)
+        print(f"  train.bin : {tr:>14,} tokens │ masqués {trm:>10,} ({trm/max(tr,1)*100:.3f}%)")
+        print(f"  val.bin   : {va:>14,} tokens │ masqués {vam:>10,} ({vam/max(va,1)*100:.3f}%)")
+        print("\n  val par catégorie :")
+        for cat in sorted(r["val_cat_stats"]):
+            s = r["val_cat_stats"][cat]
+            print(f"    {VAL_CAT_NAMES.get(cat,cat):<8} {s['n_tokens']:>12,} tokens │ "
+                  f"masqués {s['n_masked']:>8,} ({s['n_masked']/max(s['n_tokens'],1)*100:.3f}%)")
+        print("\n  → train.py charge automatiquement *_mask.bin si présents.")
         return
 
     if args.prepare or args.normalize_only:
