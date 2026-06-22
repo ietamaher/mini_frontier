@@ -40,7 +40,8 @@ def load_model(ckpt_path: Path, device: torch.device) -> tuple[MiniFrontierLLM, 
     step      = ckpt.get("step", "?")
     val_loss  = ckpt.get("val_loss", float("nan"))
     log.info(f"✅ Modèle chargé │ step={step} │ val_loss={val_loss:.4f}")
-    log.info(f"   Paramètres  : {model.get_num_params()/1e6:.2f}M")
+    log.info(f"   Paramètres  : {model.get_num_params(non_embedding=False)/1e6:.2f}M "
+             f"(dont {model.get_num_params(non_embedding=True)/1e6:.2f}M hors embedding)")
     log.info(f"   Vocab size  : {cfg.vocab_size} │ block_size: {cfg.block_size}")
 
     return model, tok

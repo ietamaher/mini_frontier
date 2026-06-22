@@ -21,10 +21,19 @@ from typing import List
 from tokenizers import Tokenizer, AddedToken
 from tokenizers.models import BPE
 from tokenizers.trainers import BpeTrainer
-from tokenizers.pre_tokenizers import Sequence, Whitespace, UnicodeScripts
+from tokenizers.pre_tokenizers import Metaspace
+from tokenizers.decoders import Metaspace as MetaspaceDecoder
 from tokenizers.normalizers import (
     Sequence as NormSequence, NFD, Strip, Replace, Lowercase
 )
+
+# Marqueur de frontière de mot (style SentencePiece). Le pré-tokeniseur
+# Metaspace remplace chaque espace par ▁ et le préfixe au 1er sous-token du
+# mot ; le décodeur fait l'inverse. C'est ce qui permet de distinguer un
+# découpage en sous-mots d'une vraie frontière de mot — l'ancien pré-tokeniseur
+# Whitespace perdait cette info et le décodage réinsérait un espace à CHAQUE
+# frontière de token (bug des espaces intra-mot : « يرك ض » au lieu de « يركض »).
+WORD_BOUNDARY = "▁"
 
 from config import TOKENIZER_PATH, CORPUS_RAW_DIR, train_cfg
 
@@ -139,9 +148,14 @@ def train_tokenizer(corpus_files: List[Path], save_path: Path,
     # Modèle BPE avec Unknown token
     tokenizer = Tokenizer(BPE(unk_token=UNK_TOKEN))
 
-    # Pré-tokenisation : séparation sur les espaces blancs (approprié pour l'arabe)
-    # UnicodeScripts évite de fusionner des tokens de scripts différents
-    tokenizer.pre_tokenizer = Sequence([Whitespace()])
+    # Pré-tokenisation Metaspace (style SentencePiece) : remplace l'espace par ▁
+    # et le préfixe au mot, ce qui PRÉSERVE les frontières de mots dans le flux
+    # de tokens. Le décodeur Metaspace correspondant reconstruit exactement le
+    # texte (▁ → espace) — d'où un round-trip propre, sans espaces intra-mot.
+    tokenizer.pre_tokenizer = Metaspace(replacement=WORD_BOUNDARY,
+                                        prepend_scheme="always", split=True)
+    tokenizer.decoder = MetaspaceDecoder(replacement=WORD_BOUNDARY,
+                                         prepend_scheme="always", split=True)
 
     # Formateur BPE
     trainer = BpeTrainer(

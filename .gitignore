@@ -8,6 +8,10 @@ data/*.txt
 data/*.tmp
 checkpoints/
 logs/
+# archives d'upload Colab (bins compressés, trop gros pour GitHub)
+*.tar.gz
+*.tar
+*.zip
 tokenizer/*.json
 # exception : tokenizer entraîné, suivi (1.1 Mo, requis pour l'inférence)
 !tokenizer/arabic_bpe_16k.json
