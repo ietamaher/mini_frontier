@@ -214,6 +214,7 @@ Optimiser       & Adam, warmup-rsqrt          & AdamW (fused), cosine         & 
 
 % ---------------------------------------------------------------- results
 \section{v1 training results and analysis}
+\label{sec:results}
 
 \subsection{Setup}
 Training used a Tesla~T4 (14.56~GB) in \texttt{float16} with a gradient scaler.
@@ -439,6 +440,73 @@ caps quality precisely where vocalisation carries the signal. These are measured
 anchors, not estimates; v2's BPB should be reported the same way for an honest
 cross-version comparison.
 
+\subsection{What the gap to frontier models actually is}
+\label{sec:gap}
+It is tempting to read v1's perplexity of 141 against a frontier model's
+reported loss of $\sim$2~nats and conclude a chasm of capability. That
+comparison is invalid for the reasons in Section~\ref{sec:bpb}: per-token loss
+is not portable across tokenizers, vocabularies, languages, or units. On the
+portable ruler, v1 sits at \textbf{1.25~bpb} against frontier models'
+$\approx$0.6--0.8~bpb on clean English --- an \emph{efficiency} gap of roughly
+$1.7\times$, part of which is the task itself (classical tashk\=il-stripped
+Arabic over a 16k vocab is intrinsically higher-entropy per byte than English
+web text) rather than the model. The honest gap is therefore far narrower than
+the raw perplexities suggest.
+
+But the byte-efficiency ratio understates one qualitative difference that
+matters more than the number. The irreducible entropy of natural-language text
+is on the order of $\sim$1~bit/character (Shannon's classic
+estimate~\cite{shannon1951}; modern long-context estimates fall lower).
+Frontier models have essentially \emph{reached} that floor --- their residual
+loss is genuine irreducible uncertainty (which word a human happened to choose),
+which is what fluency \emph{is}. v1, by contrast, sits well \emph{above} the
+fluency threshold of its own corpus: it has not run out of recoverable signal,
+it has run out of capacity and data to capture it (hence the degenerate looping
+of Section~\ref{sec:results}). The meaningful target for a monolingual 16k model
+is therefore not a frontier model's English loss but the \emph{entropy floor of
+its own corpus and tokenizer} --- a floor we deliberately do not assert
+numerically here, since classical stripped Arabic may sit higher than the MSA
+figures usually quoted, and locating it is the purpose of the fixed-corpus sweep
+(Section~\ref{sec:ceiling}).
+
+The second common worry --- that v1 uses an outdated architecture --- is
+unfounded. Table~\ref{tab:frontier} contrasts v1 against the 2024--2026 frontier
+recipe. The shared decoder-only skeleton (RMSNorm pre-norm, RoPE, SwiGLU,
+Flash-Attention, no biases) is identical; the three genuine deltas ---
+grouped-query attention~\cite{gqa}, mixture-of-experts~\cite{mixtral}, and
+long-context RoPE scaling --- are \emph{efficiency-and-scale} features, not
+quality features at this size. GQA shrinks an inference KV-cache that is already
+negligible at 512 context; MoE starves each expert of tokens below the
+billion-parameter / trillion-token regime; long-context scaling is irrelevant
+until $\text{block\_size}$ grows past 512. None would raise quality at 14--50M
+parameters. The distance to the frontier is \textbf{scale and post-training}
+(SFT, RLHF/RLAIF --- neither yet begun), not the network design.
+
+\begin{table}[h]
+\centering\small
+\caption{v1 vs.\ the 2024--26 frontier recipe. The shared core is identical; the
+deltas are efficiency/scale features that do not raise quality at this size.}
+\label{tab:frontier}
+\begin{tabular}{@{}lll@{}}
+\toprule
+Component & MiniFrontier v1 & Frontier 2024--26 \\
+\midrule
+Topology      & Decoder-only        & Decoder-only \\
+Norm          & RMSNorm pre-norm    & RMSNorm pre-norm \\
+Positions     & RoPE                & RoPE + scaling \\
+FFN           & \emph{Dense} SwiGLU & SwiGLU, often MoE \\
+Attention     & Full MHA            & GQA / MQA / MLA \\
+Kernel        & Flash-Attention     & Flash-Attention 2/3 \\
+Biases        & None                & None \\
+Vocab         & 16k (Arabic)        & 128k--256k (multiling.) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\noindent The one scale-appropriate borrow worth an ablation is QK-norm
+(normalising $Q,K$ before attention), which improves stability at the higher
+learning rate v2's larger batch permits --- a few lines of code, not a redesign.
+
 % ---------------------------------------------------------------- v2
 \section{Proposed v2: a 47M-parameter Arabic model}
 
@@ -591,6 +659,8 @@ discussed in the body.
 \bibitem{stlm} \emph{Super Tiny Language Models.} arXiv:2405.14159, 2024.
 \bibitem{shapeconv} \emph{Revisiting the Shape Convention of Transformer Language Models.} arXiv:2602.06471, 2026.
 \bibitem{resourceaware} \emph{Resource-Aware Arabic LLM Creation: Model Adaptation, Integration, and Multi-Domain Testing.} arXiv:2412.17548, 2024.
+\bibitem{mixtral} A.~Jiang et al. \emph{Mixtral of Experts.} arXiv:2401.04088, 2024.
+\bibitem{shannon1951} C.~E.~Shannon. \emph{Prediction and Entropy of Printed English.} Bell System Technical Journal, 1951.
 \end{thebibliography}
 
 \end{document}
