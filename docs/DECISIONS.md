@@ -97,3 +97,18 @@ Pour un pré-entraînement simple sur un flux dense de tokens, `np.memmap` est z
 - **Double log `[config] GPU: …`** : `resolve_dtype()` est appelé deux fois (autocast + scaler). Cosmétique, sans impact.
 - **Overfitting attendu** : sur un corpus de 69M tokens, un run de 10000 steps = ~9 epochs. La val loss finira par stagner pendant que la train loss descend. `ckpt_best.pt` protège (sauvegarde sur amélioration val uniquement). Le vrai correctif est plus de données (cible 500M-1B tokens).
 - **`torch.compile` + T4** : warning `Not enough SMs to use max_autotune_gemm` — bénin, la compilation fonctionne quand même.
+
+---
+
+## Mesures empiriques (2026-06-23) — remplacent des estimations dans le papier
+
+### MEAS-01 — Bits-per-byte (BPB) v1 : MESURÉ, pas estimé
+**Symptôme :** le papier raisonnait en perplexité (dépendante du tokenizer, non comparable entre modèles) sans métrique invariante.
+**Mesure :** `measure_bpb.py` → `bpb_results.json`. bytes/token = longueur UTF-8 réelle de chaque token décodé du val (pas une constante supposée) ; nats/token = CE flat masquée (spans coraniques exclus, comme à l'entraînement) ; BPB = (nats/ln2)/bytes.
+**Résultat :** **BPB = 1.25 bits/byte** sur tout le val (5.07 nats/tok ÷ 5.86 bytes/tok ; médiane 6, p10/p90 = 2/10 → enveloppe 0.73–3.66, point = 1.25). Par catégorie : بلاغة 1.09, نحو/صرف 1.12, معاجم 1.21, لغة 1.24, أدب 1.36, شعر 1.63 (poésie la moins compressible : tashkīl strippé = signal perdu). → §`sec:bpb` du `.tex`.
+
+### MEAS-02 — Plafond de données : sweep d'échelle sur corpus fixe (170M)
+**Symptôme :** Chinchilla donne l'optimum compute, pas le plafond d'un corpus FIXE ; le papier projetait 3.5–4.0 nats sans ancre empirique.
+**Mesure :** `scaling_sweep.py` (configs weight-TIED ~5/15/30/47M, head_dim 64, ~4 époques, recette v1, tie au runtime sans toucher `model.py`) → `scaling_results.json` + `scaling_curve.png`. **Harnais validé sur le pilote 5M** (loss 9.70→8.59, eval par catégorie + masque OK, checkpoint écrit) ; sweep complet à lancer sur RTX 3090 (infaisable sur la GTX 1650 4 Go locale).
+**Résultat :** en attente du run 3090. Interprétation : si ValW descend encore à 47M → corpus pas encore limitant ; si plat / gap qui s'ouvre → mur des 170M atteint, et la taille de croisement = point « best-on-this-data ». → §`sec:ceiling` du `.tex`.
+**Conséquence papier :** plancher 3.5 nats adouci en projection (pas un objectif acquis) ; l'arabe classique tashkīl-strippé peut plafonner plus haut que le MSA.

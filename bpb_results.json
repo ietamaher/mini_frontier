@@ -1,0 +1,111 @@
+{
+  "overall": {
+    "name": "val_all",
+    "n_tokens": 4071659,
+    "nats_per_token": 5.072,
+    "bits_per_token": 7.3174,
+    "bytes_per_token_mean": 5.856,
+    "bytes_per_token_median": 6.0,
+    "bytes_per_token_p10": 2.0,
+    "bytes_per_token_p90": 10.0,
+    "bpb": 1.2495,
+    "bpb_low": 0.7317,
+    "bpb_high": 3.6587
+  },
+  "per_category": {
+    "29": {
+      "name_ar": "لغة",
+      "name": "cat29_لغة",
+      "n_tokens": 181895,
+      "nats_per_token": 5.267,
+      "bits_per_token": 7.5987,
+      "bytes_per_token_mean": 6.149,
+      "bytes_per_token_median": 6.0,
+      "bytes_per_token_p10": 3.0,
+      "bytes_per_token_p90": 10.0,
+      "bpb": 1.2358,
+      "bpb_low": 0.7599,
+      "bpb_high": 2.5329
+    },
+    "30": {
+      "name_ar": "معاجم",
+      "name": "cat30_معاجم",
+      "n_tokens": 1241410,
+      "nats_per_token": 4.9786,
+      "bits_per_token": 7.1826,
+      "bytes_per_token_mean": 5.924,
+      "bytes_per_token_median": 6.0,
+      "bytes_per_token_p10": 2.0,
+      "bytes_per_token_p90": 10.0,
+      "bpb": 1.2125,
+      "bpb_low": 0.7183,
+      "bpb_high": 3.5913
+    },
+    "31": {
+      "name_ar": "نحو/صرف",
+      "name": "cat31_نحو/صرف",
+      "n_tokens": 782659,
+      "nats_per_token": 4.6754,
+      "bits_per_token": 6.7452,
+      "bytes_per_token_mean": 6.0,
+      "bytes_per_token_median": 6.0,
+      "bytes_per_token_p10": 2.0,
+      "bytes_per_token_p90": 10.0,
+      "bpb": 1.1241,
+      "bpb_low": 0.6745,
+      "bpb_high": 3.3726
+    },
+    "32": {
+      "name_ar": "أدب",
+      "name": "cat32_أدب",
+      "n_tokens": 1659271,
+      "nats_per_token": 5.3308,
+      "bits_per_token": 7.6907,
+      "bytes_per_token_mean": 5.641,
+      "bytes_per_token_median": 6.0,
+      "bytes_per_token_p10": 2.0,
+      "bytes_per_token_p90": 10.0,
+      "bpb": 1.3633,
+      "bpb_low": 0.7691,
+      "bpb_high": 3.8454
+    },
+    "34": {
+      "name_ar": "شعر",
+      "name": "cat34_شعر",
+      "n_tokens": 9216,
+      "nats_per_token": 5.7041,
+      "bits_per_token": 8.2293,
+      "bytes_per_token_mean": 5.051,
+      "bytes_per_token_median": 4.0,
+      "bytes_per_token_p10": 2.0,
+      "bytes_per_token_p90": 8.0,
+      "bpb": 1.6294,
+      "bpb_low": 1.0287,
+      "bpb_high": 4.1147
+    },
+    "35": {
+      "name_ar": "بلاغة",
+      "name": "cat35_بلاغة",
+      "n_tokens": 196207,
+      "nats_per_token": 4.8431,
+      "bits_per_token": 6.9871,
+      "bytes_per_token_mean": 6.436,
+      "bytes_per_token_median": 6.0,
+      "bytes_per_token_p10": 4.0,
+      "bytes_per_token_p90": 10.0,
+      "bpb": 1.0857,
+      "bpb_low": 0.6987,
+      "bpb_high": 1.7468
+    }
+  },
+  "meta": {
+    "ckpt": "/home/rapit/Desktop/mini_frontier/checkpoints/ckpt_best.pt",
+    "step": 9500,
+    "model_val_loss": 4.947070199148304,
+    "block_size": 512,
+    "vocab_size": 16000,
+    "tokenizer": "/home/rapit/Desktop/mini_frontier/tokenizer/arabic_bpe_16k.json",
+    "mask": "Quran spans excluded (mask==0)",
+    "note": "bytes/token MEASURED via per-token UTF-8 decode, not assumed"
+  }
+}

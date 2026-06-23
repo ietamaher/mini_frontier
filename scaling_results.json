@@ -1,0 +1,48 @@
+[
+  {
+    "name": "5m",
+    "params_total": 5033600,
+    "params_nonemb": 2985600,
+    "n_embd": 128,
+    "n_layer": 14,
+    "n_head": 2,
+    "hidden_dim": 384,
+    "max_iters": 200,
+    "eff_batch": 16384,
+    "final_valw": 8.4424,
+    "best_valw": 8.4424,
+    "final_flat": 8.4031,
+    "final_train": 8.4079,
+    "gap_flat_minus_train": -0.0048,
+    "per_cat": {
+      "نحو/صرف": 8.421,
+      "أدب": 8.4535,
+      "معاجم": 8.5287,
+      "لغة": 8.3865,
+      "بلاغة": 8.4236,
+      "شعر": 8.4229
+    },
+    "curve": [
+      {
+        "step": 66,
+        "valw": 8.8491,
+        "flat": 8.8303,
+        "train": 8.8398
+      },
+      {
+        "step": 132,
+        "valw": 8.5168,
+        "flat": 8.4828,
+        "train": 8.4877
+      },
+      {
+        "step": 198,
+        "valw": 8.443,
+        "flat": 8.4036,
+        "train": 8.4185
+      }
+    ],
+    "diverged": false,
+    "wall_seconds": 480.1
+  }
+]
