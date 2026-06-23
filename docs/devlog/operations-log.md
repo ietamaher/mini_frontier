@@ -135,3 +135,25 @@ timestamps / session history (June 2026).
   tokens are more informative). Judge the new run by curve shape + generation quality.
 - **Old checkpoints (`checkpoints/ckpt_*.pt`, `checkpoints/no_masker/`) are now invalid**
   (trained on old token IDs). Next: full model retrain on Colab with the new tokenizer+bins.
+
+## M. Metaspace run — completed & VALIDATED (2026-06-23)
+
+The corrected run (new Metaspace tokenizer + new bins) ran 10k steps on Colab T4.
+- **First attempt was a false start:** a run trained on the OLD bins (loaded stale data from
+  Drive) — caught via the provenance cross-check (clean decode only with the OLD tokenizer).
+  See bugs-and-gotchas (data provenance). Re-run on the correct new bins.
+- **Final validated model = `ckpt_best.pt` = step 9500, ValW 4.9471** (saved as
+  `checkpoints/metaspace_baseline_step9500.pt` to protect it from the next run; checkpoints/
+  is gitignored — local protection only).
+- Curve: 1000→6.18, 5000→5.13, 7500→4.98, 9500→**4.95**. Smooth, converged, no overfitting.
+- Per-category @ 9500: نحو/صرف **4.666** (lowest ✓) < بلاغة 4.839 < معاجم 4.976 < لغة 5.254
+  < أدب 5.353 < شعر 5.717 — healthy weighting signature, نحو strongest.
+- **Generation VALIDATED:** clean decode, NO intra-word spaces (the bug is fixed); coherent
+  إعراب register over ~55 tokens; provenance cross-check passes (OLD tokenizer → garbage →
+  confirms training on new bins). قال تعالى prompt → no fabricated verse / no ﴿﴾ (masking OK).
+- ⚠️ **NOT comparable to the old 4.6738** — different token scale (Metaspace = fewer,
+  more-informative tokens → higher per-token CE). This is the real reference baseline now.
+- **Note for next run (50/80M):** eval/save cadence is every 500 steps, so the LAST eval was
+  step 9500; steps 9550–9999 trained but were never evaluated/checkpointed (the final ~500
+  steps' small gain, ~0.02 loss, is lost). Force a final eval+save at the very last step next
+  time. Minor, but free.

@@ -21,8 +21,10 @@ Two repos are involved:
 Full 10k-step Colab run complete. Best weighted val loss **4.6738** (step 9500),
 beats the pre-masking baseline (4.81). Qur'an span-masking merged to `main`.
 Generation is register-correct (نحو strongest). Tokenizer decode bug (intra-word
-spaces) **fixed** via Metaspace + full re-encode (2026-06-22). **Pending:** (1) validate
-the corrected Metaspace run (the prior "8500" run trained on OLD bins — provenance bug);
+spaces) **fixed** via Metaspace + full re-encode (2026-06-22). Corrected Metaspace run
+**VALIDATED** (2026-06-23): `ckpt_best.pt` = step 9500, ValW 4.9471, clean decode, نحو
+strongest, provenance confirmed (saved as `metaspace_baseline_step9500.pt`). This is the
+reference baseline. **Pending:** (1) ✅ done — Metaspace run validated;
 (2) vocalized نحو/تشكيل track vs general LM — STRATEGIC FORK; (3) SCALING ROADMAP to a
 50–80M model — decision (a) RESOLVED: targeted prose expansion
 (تاريخ/تراجم/سير → شروح حديث → تفسير, dedup-first, كتب السنة out of scope until dedup;

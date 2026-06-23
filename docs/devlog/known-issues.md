@@ -61,6 +61,15 @@ doesn't start from scratch.
 - **Status:** not a problem — a 14.6M model can't saturate a T4; it's launch/memory-bound,
   not compute-bound. Don't "optimize" this away.
 
+## 7. No final eval/checkpoint at the last step  (easy fix, do before 50/80M run)
+
+- **Symptom:** eval+save run every 500 steps, so on a 10k-step run the last evaluated
+  checkpoint is **step 9500**; steps 9550–9999 train but are never evaluated or saved
+  (`ckpt_best.pt` = step 9500). The final ~500 steps' improvement (~0.02 loss) is discarded.
+- **Fix:** in `train.py`, force an eval + checkpoint when `step == max_iters - 1` (or run a
+  final eval after the loop). Trivial, free gain. Apply before the larger 50/80M run where
+  the wasted tail is proportionally bigger if cadence isn't adjusted.
+
 ---
 
 # STRATEGIC FORK — vocalized track vs general LM (de-vocalized)  ⚠️ decision pending (2026-06-22)
