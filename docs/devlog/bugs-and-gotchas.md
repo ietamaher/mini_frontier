@@ -100,6 +100,19 @@ If you're about to change pipeline / .gitignore / Colab packaging / checkpoints,
   `normalize_arabic` runs (it strips anything outside its kept ranges). Don't add new
   marker-dependent logic after normalization.
 
+## 11. Reusable build artifacts left in /tmp got wiped (Shamela Java extractor)
+
+- **Symptom:** `ShamelaQueryExtract.class` + its `.java` source lived in `/tmp` (per the old
+  scripts' `-cp /tmp`). `/tmp` was cleared → both gone; pilot extraction blocked.
+- **Recovery:** the source was recoverable from the session transcript jsonl (grep for the
+  class body). Re-saved + recompiled.
+- **Fix:** moved source+class to **`arabic-corpus/scripts/java/`** (in-repo, persistent),
+  added `scripts/java/README.md` (build commands), and repointed both
+  `extract_language_core.py` and `shamela_watch_extract.py` classpath from `/tmp` →
+  `scripts/java`. Compile with system `javac 11`, run with bundled JRE 21.
+- **Rule:** never store reusable build artifacts, compiled classes, or anything you'll need
+  again in `/tmp`. Keep them in the repo. `/tmp` is scratch-only.
+
 ---
 
 ## Standing constraints (don't violate)

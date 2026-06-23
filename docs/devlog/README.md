@@ -20,5 +20,11 @@ Two repos are involved:
 
 Full 10k-step Colab run complete. Best weighted val loss **4.6738** (step 9500),
 beats the pre-masking baseline (4.81). Qur'an span-masking merged to `main`.
-Generation is register-correct (نحو strongest). Top open issue: tokenizer decode
-inserts spurious intra-word spaces — see [known-issues.md](known-issues.md).
+Generation is register-correct (نحو strongest). Tokenizer decode bug (intra-word
+spaces) **fixed** via Metaspace + full re-encode (2026-06-22). **Pending:** (1) validate
+the corrected Metaspace run (the prior "8500" run trained on OLD bins — provenance bug);
+(2) vocalized نحو/تشكيل track vs general LM — STRATEGIC FORK; (3) SCALING ROADMAP to a
+50–80M model — decision (a) RESOLVED: targeted prose expansion
+(تاريخ/تراجم/سير → شروح حديث → تفسير, dedup-first, كتب السنة out of scope until dedup;
+grammar fraction gets a protected floor; pilot 2–3 تاريخ+تراجم books first). ON HOLD until
+the run is validated. All three in [known-issues.md](known-issues.md).
