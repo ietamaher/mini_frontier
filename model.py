@@ -297,6 +297,7 @@ class MiniFrontierLLM(nn.Module):
         top_p:        float = 0.9,     # nucleus sampling
         repetition_penalty: float = 1.1,
         eos_id:       int | None = None,
+        bad_token_ids: list[int] | None = None,   # tokens interdits (logits → -inf)
     ) -> torch.Tensor:
         """
         Génération auto-régressive avec :
@@ -305,6 +306,9 @@ class MiniFrontierLLM(nn.Module):
           • Nucleus (top-p) filtering
           • Repetition penalty
           • Arrêt sur EOS token
+          • bad_token_ids : interdiction dure de certains tokens (ex. cadres de
+            citation coranique « تعالى » pour éviter la fabrication d'Écriture).
+            Génération uniquement — n'affecte ni l'architecture ni l'entraînement.
         """
         for _ in range(max_new_tokens):
             # Tronquer si on dépasse le contexte max
@@ -312,6 +316,10 @@ class MiniFrontierLLM(nn.Module):
 
             logits, _ = self(idx_cond)
             logits = logits[:, -1, :]       # (1, vocab_size) — dernier token
+
+            # Interdiction dure (avant tout filtrage) — exclut du sampling
+            if bad_token_ids:
+                logits[:, bad_token_ids] = float("-inf")
 
             # Repetition penalty (diminue la proba des tokens déjà générés)
             if repetition_penalty != 1.0:

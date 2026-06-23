@@ -70,6 +70,26 @@ doesn't start from scratch.
   final eval after the loop). Trivial, free gain. Apply before the larger 50/80M run where
   the wasted tail is proportionally bigger if cadence isn't adjusted.
 
+## 8. Qur'an fabrication persists despite loss-masking (frame leak)  ◑ mitigated at inference
+
+- **Symptom:** generation still emits `قال تعالي: "..." [التوبة ١٤٩]` — confident but FABRICATED
+  citations (fake verse text + fake sūra/āya reference).
+- **Root cause (verified):** loss-masking set the VERSE target tokens (inside `﴿…﴾`) to -1, but
+  NOT the citation FRAME (`قال تعالى`/`قوله تعالى`, ~3700 in a 40-file نحو sample) nor the bracket
+  references. So the model (a) learned to emit the frame freely (never masked), and (b) got ZERO
+  gradient on the first verse token → never learned a real continuation → at generation it fills
+  the slot with hallucinated Arabic. Masking prevented *memorising real scripture* (output is
+  fake, not real verses) but NOT *emitting citation-shaped output*. Note: normalisation ى→ي means
+  the live token is `تعالي`, not `تعالى`.
+- **Mitigation (inference, no retrain):** `generate.py` now bans at sampling every vocab token
+  containing `تعالى/تعالي/﴿/﴾` (6 tokens) → the divine epithet can't be emitted → no citation
+  frame can form. Added `model.generate(bad_token_ids=...)` (generation-only, v1 weights/training
+  untouched) + `quran_frame_token_ids()` + `--allow_quran` to disable. Verified: the anomaly
+  disappears; model stays in grammatical register. Residual: `قال الله` without `تعالى` is not
+  banned (الله can't be banned), a weaker trigger.
+- **Proper fix (next retrain):** extend the training mask to cover the FRAME tokens + references,
+  not just the `﴿…﴾` verse span. Real cure = alignment/SFT ("don't fabricate scripture") at v2.
+
 ---
 
 # STRATEGIC FORK — vocalized track vs general LM (de-vocalized)  ⚠️ decision pending (2026-06-22)

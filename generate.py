@@ -47,6 +47,27 @@ def load_model(ckpt_path: Path, device: torch.device) -> tuple[MiniFrontierLLM, 
     return model, tok
 
 
+# ── Guard anti-fabrication coranique ────────────────────────────────────────────
+# Le masquage à l'entraînement empêche de MÉMORISER les versets (﴿…﴾), mais pas
+# d'ÉMETTRE le CADRE « قال تعالى / قوله تعالى / قال الله تعالى » puis de fabriquer
+# un faux verset dans le trou. On supprime donc au sampling tout token portant
+# l'épithète divine « تعالى » (forme normalisée « تعالي » car ى→ي), ce qui rend le
+# cadre de citation impossible à former. Surgical : « الله » reste autorisé.
+_QURAN_FRAME_SUBSTRINGS = ("تعالى", "تعالي", "﴿", "﴾")
+
+
+def quran_frame_token_ids(tok: ArabicTokenizer) -> list[int]:
+    """IDs de tous les tokens du vocab contenant un marqueur de cadre coranique."""
+    subs = set()
+    for s in _QURAN_FRAME_SUBSTRINGS:
+        for v in (s, normalize_arabic(s)):
+            if v:
+                subs.add(v)
+    bad = [tid for tid in range(tok.vocab_size)
+           if any(sub in tok.decode([tid]) for sub in subs)]
+    return bad
+
+
 @torch.inference_mode()
 def generate_text(
     model: MiniFrontierLLM,
@@ -54,6 +75,7 @@ def generate_text(
     prompt: str,
     cfg:   InferConfig = infer_cfg,
     device: torch.device | None = None,
+    bad_token_ids: list[int] | None = None,
 ) -> str:
     """Génère du texte à partir d'un prompt arabe."""
     if device is None:
@@ -73,6 +95,7 @@ def generate_text(
         top_p=cfg.top_p,
         repetition_penalty=cfg.repetition_penalty,
         eos_id=tok.eos_id,
+        bad_token_ids=bad_token_ids,
     )
 
     # Décodage (exclure le prompt d'origine)
@@ -81,12 +104,15 @@ def generate_text(
 
 
 def interactive_mode(model: MiniFrontierLLM, tok: ArabicTokenizer,
-                     cfg: InferConfig, device: torch.device):
+                     cfg: InferConfig, device: torch.device,
+                     bad_token_ids: list[int] | None = None):
     """REPL interactif pour générer du texte en arabe."""
     print("\n" + "═"*60)
     print("  MiniFrontier — Mode Interactif (Ctrl+C pour quitter)")
     print("═"*60)
     print(f"  Température : {cfg.temperature} │ Top-P : {cfg.top_p} │ Top-K : {cfg.top_k}")
+    if bad_token_ids:
+        print(f"  Guard Coran : ON ({len(bad_token_ids)} tokens « تعالى/﴿﴾ » supprimés)")
     print("═"*60 + "\n")
 
     while True:
@@ -96,7 +122,7 @@ def interactive_mode(model: MiniFrontierLLM, tok: ArabicTokenizer,
                 continue
 
             print("\n📖 Génération…\n")
-            result = generate_text(model, tok, prompt, cfg, device)
+            result = generate_text(model, tok, prompt, cfg, device, bad_token_ids)
             print("─"*50)
             print(f"  {prompt}{result}")
             print("─"*50 + "\n")
@@ -119,6 +145,8 @@ if __name__ == "__main__":
     parser.add_argument("--top_k",        type=int,   default=infer_cfg.top_k)
     parser.add_argument("--max_tokens",   type=int,   default=infer_cfg.max_new_tokens)
     parser.add_argument("--rep_penalty",  type=float, default=infer_cfg.repetition_penalty)
+    parser.add_argument("--allow_quran",  action="store_true",
+                        help="désactive le guard anti-fabrication coranique (par défaut: ON)")
     args = parser.parse_args()
 
     # Appliquer les overrides
@@ -136,10 +164,16 @@ if __name__ == "__main__":
     device = get_device()
     model, tok = load_model(args.ckpt, device)
 
+    # Guard anti-fabrication coranique (actif par défaut, désactivable)
+    bad_ids = None if args.allow_quran else quran_frame_token_ids(tok)
+    if bad_ids:
+        log.info(f"🛡️  Guard Coran ACTIF — {len(bad_ids)} tokens « تعالى/﴿﴾ » supprimés "
+                 f"du sampling (--allow_quran pour désactiver)")
+
     if args.interactive:
-        interactive_mode(model, tok, infer_cfg, device)
+        interactive_mode(model, tok, infer_cfg, device, bad_ids)
     elif args.prompt:
-        result = generate_text(model, tok, args.prompt, infer_cfg, device)
+        result = generate_text(model, tok, args.prompt, infer_cfg, device, bad_ids)
         print(f"\n{args.prompt}{result}\n")
     else:
         # Mode démo avec quelques prompts de test
@@ -150,5 +184,5 @@ if __name__ == "__main__":
             "قال الولد الصغير",
         ]
         for p in test_prompts:
-            result = generate_text(model, tok, p, infer_cfg, device)
+            result = generate_text(model, tok, p, infer_cfg, device, bad_ids)
             print(f"\n  [{p}] → {result[:120]}…")
