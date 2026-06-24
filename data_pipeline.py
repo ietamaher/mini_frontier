@@ -615,26 +615,53 @@ def mask_for(bin_path: Path) -> Path:
 # crochets (fréquent en grammaire) n'est pas détectable et reste non masqué.
 QURAN_SPAN_RE = re.compile(r'﴿([^﴾]*)﴾')
 
+# Fix #8 — cadres de citation coranique (texte BRUT, avant normalisation, donc ى).
+# Masquer ces tokens à la loss empêche le modèle d'APPRENDRE à émettre le cadre
+# « قال تعالى » puis de fabriquer un faux verset (cf. guard d'inférence dans
+# generate.py qui bannit « تعالى » au sampling). Activé via mask_frames=True (v2).
+QURAN_FRAME_RE = re.compile(
+    r'قال\s+الله\s+تعال[ىي]|قال\s+تعال[ىي]|قوله\s+تعال[ىي]|سبحانه\s+وتعال[ىي]|تعال[ىي]'
+)
 
-def _quran_segments(line: str):
-    """Découpe une ligne brute en segments (texte, is_quran) selon ﴿…﴾."""
+
+def _split_frames(text: str, mask_frames: bool):
+    """Sous-découpe un segment NON-verset en (texte, is_masked) selon les cadres."""
+    if not text:
+        return []
+    if not mask_frames:
+        return [(text, False)]
+    segs, pos = [], 0
+    for m in QURAN_FRAME_RE.finditer(text):
+        if m.start() > pos:
+            segs.append((text[pos:m.start()], False))
+        segs.append((m.group(0), True))     # cadre → masqué
+        pos = m.end()
+    if pos < len(text):
+        segs.append((text[pos:], False))
+    return segs
+
+
+def _quran_segments(line: str, mask_frames: bool = False):
+    """Découpe une ligne brute en segments (texte, is_masked) : versets ﴿…﴾
+    (toujours) + cadres de citation (si mask_frames, fix #8)."""
     segs = []
     pos = 0
     for m in QURAN_SPAN_RE.finditer(line):
         if m.start() > pos:
-            segs.append((line[pos:m.start()], False))
+            segs.extend(_split_frames(line[pos:m.start()], mask_frames))
         inner = m.group(1)
         if inner:
             segs.append((inner, True))
         pos = m.end()
     if pos < len(line):
-        segs.append((line[pos:], False))
+        segs.extend(_split_frames(line[pos:], mask_frames))
     return segs
 
 
 def _encode_chunks_masked(chunks: list, tok: ArabicTokenizer,
                           out_bin: Path, out_mask: Path, seed: int,
-                          flush_tokens: int = 4_000_000) -> tuple:
+                          flush_tokens: int = 4_000_000,
+                          mask_frames: bool = False) -> tuple:
     """
     Encode une liste de passes (path, fraction, cat) → (out_bin uint16,
     out_mask uint8), avec masquage des spans coraniques. RAM-safe (flush par
@@ -681,9 +708,9 @@ def _encode_chunks_masked(chunks: list, tok: ArabicTokenizer,
             for i, line in enumerate(_content_lines(path)):
                 if budget is not None and i >= budget:
                     break
-                if '﴿' in line:
+                if '﴿' in line or (mask_frames and 'تعال' in line):
                     flush_plain()                      # préserve l'ordre
-                    for seg, is_q in _quran_segments(line):
+                    for seg, is_q in _quran_segments(line, mask_frames):
                         norm = normalize_arabic(seg)
                         if not norm:
                             continue
@@ -707,11 +734,13 @@ def _encode_chunks_masked(chunks: list, tok: ArabicTokenizer,
 
 
 def prepare_shamela_split_masked(tok: ArabicTokenizer, val_frac: float = 0.05,
-                                 seed: int = SHAMELA_SHUFFLE_SEED) -> dict:
+                                 seed: int = SHAMELA_SHUFFLE_SEED,
+                                 mask_frames: bool = False) -> dict:
     """
     Comme prepare_shamela_split, mais avec MASQUAGE des spans coraniques.
     Écrit train.bin + train_mask.bin, val.bin + val_mask.bin, et les
     val_cat{N}.bin + val_cat{N}_mask.bin. Même sélection val déterministe.
+    mask_frames=True (fix #8, v2) masque aussi les cadres « قال تعالى » etc.
     """
     index = _scan_shamela_clean()
     rows  = _load_manifest_rows(index)
@@ -730,9 +759,11 @@ def prepare_shamela_split_masked(tok: ArabicTokenizer, val_frac: float = 0.05,
     val_chunks = [(r['path'], 1.0, r['cat']) for r in val_rows]
 
     log.info(f"Encodage MASQUÉ train ({len(train_chunks)} passes) → train.bin + train_mask.bin…")
-    n_tr, n_tr_m = _encode_chunks_masked(train_chunks, tok, TRAIN_BIN, mask_for(TRAIN_BIN), seed)
+    n_tr, n_tr_m = _encode_chunks_masked(train_chunks, tok, TRAIN_BIN, mask_for(TRAIN_BIN), seed,
+                                         mask_frames=mask_frames)
     log.info(f"Encodage MASQUÉ val ({len(val_chunks)} livres) → val.bin + val_mask.bin…")
-    n_va, n_va_m = _encode_chunks_masked(val_chunks, tok, VAL_BIN, mask_for(VAL_BIN), seed + 1)
+    n_va, n_va_m = _encode_chunks_masked(val_chunks, tok, VAL_BIN, mask_for(VAL_BIN), seed + 1,
+                                         mask_frames=mask_frames)
 
     # val par catégorie (masqué aussi, pour cohérence de l'éval)
     val_by_cat = defaultdict(list)
@@ -742,7 +773,8 @@ def prepare_shamela_split_masked(tok: ArabicTokenizer, val_frac: float = 0.05,
     for cat in sorted(val_by_cat):
         chunks = [(r['path'], 1.0, cat) for r in val_by_cat[cat]]
         cb = val_cat_bin(cat)
-        nt, nm = _encode_chunks_masked(chunks, tok, cb, mask_for(cb), seed)
+        nt, nm = _encode_chunks_masked(chunks, tok, cb, mask_for(cb), seed,
+                                       mask_frames=mask_frames)
         cat_stats[cat] = {"n_books": len(val_by_cat[cat]), "n_tokens": nt, "n_masked": nm}
 
     return {
@@ -782,6 +814,9 @@ def _cli():
     parser.add_argument("--encode_shamela_masked", action="store_true",
                         help="Encoder avec masquage des spans coraniques "
                              "(train/val/val_cat + *_mask.bin)")
+    parser.add_argument("--mask_frames", action="store_true",
+                        help="Fix #8 (v2) : masquer AUSSI les cadres « قال تعالى » etc., "
+                             "pas seulement les versets ﴿…﴾")
     parser.add_argument("--held_out",        type=int, default=None,
                         help="book_id exclu du flux (mesure tokenizer held-out)")
     parser.add_argument("--val_book_frac",   type=float, default=0.05,
@@ -860,7 +895,10 @@ def _cli():
     if args.encode_shamela_masked:
         from config import TOKENIZER_PATH, VAL_CAT_NAMES
         tok = ArabicTokenizer(TOKENIZER_PATH)
-        r = prepare_shamela_split_masked(tok, val_frac=args.val_book_frac)
+        if args.mask_frames:
+            log.info("Fix #8 ACTIF — masquage des cadres « قال تعالى » en plus des versets ﴿…﴾")
+        r = prepare_shamela_split_masked(tok, val_frac=args.val_book_frac,
+                                         mask_frames=args.mask_frames)
         tr, trm = r["n_train_tokens"], r["n_train_masked"]
         va, vam = r["n_val_tokens"],   r["n_val_masked"]
         print("\n" + "=" * 70)

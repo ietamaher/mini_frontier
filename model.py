@@ -228,7 +228,9 @@ class MiniFrontierLLM(nn.Module):
         self.norm_f = RMSNorm(cfg.n_embd)
 
         # Projection vers le vocabulaire
-        # NOTE : pas de weight tying ici (standard Llama) — différence avec GPT-2
+        # v1 : pas de weight tying (standard Llama). v2 : tying activé via
+        # cfg.tie_embeddings (libère ~4.1M params, le levier #1 du scaling — voir
+        # docs/RESEARCH_v1_to_v2.md §6.2). Défaut False → comportement v1 inchangé.
         self.lm_head = nn.Linear(cfg.n_embd, cfg.vocab_size, bias=False)
 
         # Initialisation des poids
@@ -240,6 +242,11 @@ class MiniFrontierLLM(nn.Module):
         for name, p in self.named_parameters():
             if name.endswith("wo.weight") or name.endswith("w2.weight"):
                 nn.init.normal_(p, mean=0.0, std=0.02 * scale)
+
+        # Weight tying (après init, façon nanoGPT) — lm_head partage l'embedding
+        # d'entrée. model.parameters() dé-duplique le tenseur partagé.
+        if getattr(cfg, "tie_embeddings", False):
+            self.lm_head.weight = self.tok_emb.weight
 
         self._log_params()
 

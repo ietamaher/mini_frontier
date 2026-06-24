@@ -311,8 +311,9 @@ def train(cfg_train: TrainConfig, cfg_model: ModelConfig, resume: bool = False,
         for pg in optimizer.param_groups:
             pg["lr"] = lr
 
-        # ── Évaluation périodique ──────────────────────────────────────────
-        if step % cfg_train.eval_interval == 0:
+        # ── Évaluation périodique (+ éval forcée au tout dernier step, fix #7) ──
+        is_last_step = (step == cfg_train.max_iters - 1)
+        if step % cfg_train.eval_interval == 0 or is_last_step:
             # Val plate (référence) + val par catégorie + val pondérée (mix train).
             flat_val = evaluate(model, val_ds, cfg_train, cfg_model, device, autocast_ctx)
             per_cat  = (evaluate_categories(model, val_datasets, cfg_train, device, autocast_ctx)
@@ -346,8 +347,8 @@ def train(cfg_train: TrainConfig, cfg_model: ModelConfig, resume: bool = False,
             }) + "\n")
             log_fh.flush()
 
-            # Sauvegarde si meilleure val pondérée
-            if is_best or step % cfg_train.save_interval == 0:
+            # Sauvegarde si meilleure val pondérée, à la cadence, ou au dernier step (#7)
+            if is_best or step % cfg_train.save_interval == 0 or is_last_step:
                 save_checkpoint(step, model, optimizer, w_val, cfg_model, cfg_train, scaler=scaler, is_best=is_best)
 
         # ── Forward / Backward avec Gradient Accumulation ─────────────────

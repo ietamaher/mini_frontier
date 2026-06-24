@@ -91,6 +91,11 @@ class ModelConfig:
     # RoPE base (10_000 standard, 500_000 pour YaRN long-context)
     rope_base:   float = 10_000.0
 
+    # Weight tying entre l'embedding d'entrée et lm_head.
+    # v1 : False (standard Llama). v2 : True — libère ~4.1M params (28% du modèle)
+    # redéployés dans le calcul. Voir docs/RESEARCH_v1_to_v2.md §6.2.
+    tie_embeddings: bool = False
+
 
 # ── Entraînement ──────────────────────────────────────────────────────────────
 @dataclass
@@ -190,3 +195,18 @@ def get_autocast_ctx(device: torch.device, dtype_str: str):
 model_cfg = ModelConfig()
 train_cfg = TrainConfig()
 infer_cfg = InferConfig()
+
+# ── Ḍād-v2 — Config C (~47M, weight-tied) ─────────────────────────────────────
+# Cible v2 : n_embd 512 · 12 couches · head_dim 64 · hidden 1408 · TIED.
+# 46.7M total / 38.5M non-embedding (6× le calcul de v1). Corpus optimal ~935M
+# tokens (Chinchilla). block_size reste 512 ; passer à 1024 est recommandé contre
+# le looping si la VRAM 3090 le permet (voir RESEARCH §7.2). NE PAS utiliser pour
+# v1 — c'est un modèle séparé (nouveau tokenizer + corpus élargi).
+model_cfg_v2 = ModelConfig(
+    n_embd=512,
+    n_layer=12,
+    n_head=8,            # head_dim = 512/8 = 64
+    hidden_dim=1408,     # ≈ (8/3)·512, multiple de 64
+    block_size=512,
+    tie_embeddings=True,
+)

@@ -61,7 +61,11 @@ doesn't start from scratch.
 - **Status:** not a problem — a 14.6M model can't saturate a T4; it's launch/memory-bound,
   not compute-bound. Don't "optimize" this away.
 
-## 7. No final eval/checkpoint at the last step  (easy fix, do before 50/80M run)
+## 7. No final eval/checkpoint at the last step  ✅ FIXED (2026-06-24)
+
+Implemented in `train.py`: `is_last_step = (step == max_iters-1)` now forces both the eval
+block and the checkpoint save on the final iteration. (Original entry below.)
+
 
 - **Symptom:** eval+save run every 500 steps, so on a 10k-step run the last evaluated
   checkpoint is **step 9500**; steps 9550–9999 train but are never evaluated or saved
@@ -89,6 +93,10 @@ doesn't start from scratch.
   banned (الله can't be banned), a weaker trigger.
 - **Proper fix (next retrain):** extend the training mask to cover the FRAME tokens + references,
   not just the `﴿…﴾` verse span. Real cure = alignment/SFT ("don't fabricate scripture") at v2.
+- **UPDATE 2026-06-24 (training fix implemented, behind flag):** `data_pipeline.py` now masks
+  citation frames (`قال تعالى`/`قوله تعالى`/`قال الله تعالى`/`سبحانه وتعالى`/bare `تعالى`) in
+  addition to `﴿…﴾`, via `--mask_frames` / `prepare_shamela_split_masked(mask_frames=True)`.
+  Default OFF (v1 bins reproducible). Ḍād-v2 will encode with `--mask_frames`.
 
 ---
 
