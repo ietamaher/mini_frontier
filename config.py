@@ -18,6 +18,7 @@ for d in (DATA_DIR, TOKENIZER_DIR, CHECKPOINT_DIR, LOG_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
 TOKENIZER_PATH = TOKENIZER_DIR / "arabic_bpe_16k.json"
+TOKENIZER_PATH_V2 = TOKENIZER_DIR / "arabic_bpe_16k_v2.json"   # Ḍād-v2 (corpus élargi)
 CORPUS_BIN     = DATA_DIR / "corpus.bin"        # données tokenisées (numpy memmap)
 CORPUS_RAW_DIR = DATA_DIR / "raw"               # fichiers .txt arabes bruts
 
@@ -33,6 +34,12 @@ CORPUS_MANIFEST   = SHAMELA_STAGING / "corpus_manifest.csv"
 SHAMELA_STREAM_DIR   = DATA_DIR / "shamela"
 SHAMELA_STREAM       = SHAMELA_STREAM_DIR / "stream.txt"
 SHAMELA_SHUFFLE_SEED = 42
+
+# ── Ḍād-v2 — corpus élargi (prose) + mix rééquilibré ─────────────────────────
+# v2 écrit vers des chemins SÉPARÉS pour ne pas écraser les artefacts v1
+# (tokenizer/bins v1 restent valides pour le baseline Ḍād-v1).
+CORPUS_MANIFEST_V2 = SHAMELA_STAGING / "corpus_manifest_v2.csv"
+SHAMELA_STREAM_V2  = SHAMELA_STREAM_DIR / "stream_v2.txt"
 
 # ── Évaluation pondérée par catégorie ────────────────────────────────────────
 # La val loss "plate" (moyenne par token) est dominée par أدب/معاجم, justement

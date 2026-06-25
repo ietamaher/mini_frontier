@@ -13,8 +13,9 @@ logs/
 *.tar
 *.zip
 tokenizer/*.json
-# exception : tokenizer entraîné, suivi (1.1 Mo, requis pour l'inférence)
+# exception : tokenizers entraînés, suivis (requis pour l'inférence)
 !tokenizer/arabic_bpe_16k.json
+!tokenizer/arabic_bpe_16k_v2.json
 *.pt
 *.ckpt
 
