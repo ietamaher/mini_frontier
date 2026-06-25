@@ -36,6 +36,7 @@ from config import (
     CORPUS_RAW_DIR, CORPUS_BIN, DATA_DIR,
     CORPUS_MANIFEST, SHAMELA_STAGING, SHAMELA_STREAM_DIR, SHAMELA_STREAM,
     SHAMELA_SHUFFLE_SEED, val_cat_bin,
+    CORPUS_MANIFEST_V2,
     model_cfg, train_cfg,
 )
 from tokenizer_arabic import ArabicTokenizer, normalize_arabic, normalize_file
@@ -46,6 +47,9 @@ log = logging.getLogger(__name__)
 NORM_DIR  = DATA_DIR / "normalized"
 TRAIN_BIN = DATA_DIR / "train.bin"
 VAL_BIN   = DATA_DIR / "val.bin"
+# Ḍād-v2 — chemins séparés (activés par --v2 dans le CLI, ne touchent pas v1)
+TRAIN_BIN_V2 = DATA_DIR / "train_v2.bin"
+VAL_BIN_V2   = DATA_DIR / "val_v2.bin"
 
 
 # ── Pipeline Shamela : flux texte pondéré (depuis arabic-corpus/staging) ───────
@@ -817,6 +821,8 @@ def _cli():
     parser.add_argument("--mask_frames", action="store_true",
                         help="Fix #8 (v2) : masquer AUSSI les cadres « قال تعالى » etc., "
                              "pas seulement les versets ﴿…﴾")
+    parser.add_argument("--v2", action="store_true",
+                        help="Ḍād-v2 : utiliser manifeste/bins/tokenizer v2 (chemins séparés)")
     parser.add_argument("--held_out",        type=int, default=None,
                         help="book_id exclu du flux (mesure tokenizer held-out)")
     parser.add_argument("--val_book_frac",   type=float, default=0.05,
@@ -829,6 +835,15 @@ def _cli():
                         help="Caractères max par chunk — vraie garantie de RAM, "
                              "réduire si OOM persiste (ex: 2000000)")
     args = parser.parse_args()
+
+    # Ḍād-v2 : remappe les globals vers les chemins v2 (n'écrase pas v1)
+    if getattr(args, "v2", False):
+        global CORPUS_MANIFEST, TRAIN_BIN, VAL_BIN, val_cat_bin
+        CORPUS_MANIFEST = CORPUS_MANIFEST_V2
+        TRAIN_BIN = TRAIN_BIN_V2
+        VAL_BIN = VAL_BIN_V2
+        val_cat_bin = lambda cat: DATA_DIR / f"val_cat{cat}_v2.bin"
+        log.info("🅥2 MODE V2 — manifeste/bins/tokenizer v2 (v1 intact)")
 
     if args.stats:
         print_corpus_stats()
@@ -893,8 +908,8 @@ def _cli():
         return
 
     if args.encode_shamela_masked:
-        from config import TOKENIZER_PATH, VAL_CAT_NAMES
-        tok = ArabicTokenizer(TOKENIZER_PATH)
+        from config import TOKENIZER_PATH, TOKENIZER_PATH_V2, VAL_CAT_NAMES
+        tok = ArabicTokenizer(TOKENIZER_PATH_V2 if args.v2 else TOKENIZER_PATH)
         if args.mask_frames:
             log.info("Fix #8 ACTIF — masquage des cadres « قال تعالى » en plus des versets ﴿…﴾")
         r = prepare_shamela_split_masked(tok, val_frac=args.val_book_frac,
