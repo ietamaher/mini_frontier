@@ -18,14 +18,20 @@ import torch
 from config import ModelConfig, InferConfig, infer_cfg, CHECKPOINT_DIR, get_device
 from model import MiniFrontierLLM
 from tokenizer_arabic import ArabicTokenizer, normalize_arabic
-from config import TOKENIZER_PATH
+from config import TOKENIZER_PATH, TOKENIZER_PATH_V2
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s │ %(message)s")
 log = logging.getLogger(__name__)
 
 
-def load_model(ckpt_path: Path, device: torch.device) -> tuple[MiniFrontierLLM, ArabicTokenizer]:
-    """Charge le modèle et le tokenizer depuis un checkpoint."""
+def load_model(ckpt_path: Path, device: torch.device,
+               tokenizer_path: Path = TOKENIZER_PATH) -> tuple[MiniFrontierLLM, ArabicTokenizer]:
+    """Charge le modèle et le tokenizer depuis un checkpoint.
+
+    tokenizer_path DOIT correspondre au modèle : un checkpoint v2 (tie_embeddings,
+    n_embd=512) exige le tokenizer v2, sinon le décodage sort du charabia (mapping
+    id→token différent). Voir --v2 / --tokenizer en CLI.
+    """
     log.info(f"Chargement du modèle : {ckpt_path.name}")
 
     ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
@@ -35,7 +41,8 @@ def load_model(ckpt_path: Path, device: torch.device) -> tuple[MiniFrontierLLM, 
     model.load_state_dict(ckpt["model"])
     model.eval()
 
-    tok = ArabicTokenizer(TOKENIZER_PATH)
+    tok = ArabicTokenizer(tokenizer_path)
+    log.info(f"   Tokenizer   : {Path(tokenizer_path).name}")
 
     step      = ckpt.get("step", "?")
     val_loss  = ckpt.get("val_loss", float("nan"))
@@ -147,6 +154,10 @@ if __name__ == "__main__":
     parser.add_argument("--rep_penalty",  type=float, default=infer_cfg.repetition_penalty)
     parser.add_argument("--allow_quran",  action="store_true",
                         help="désactive le guard anti-fabrication coranique (par défaut: ON)")
+    parser.add_argument("--v2",           action="store_true",
+                        help="utilise le tokenizer Ḍād-v2 (requis pour un checkpoint v2)")
+    parser.add_argument("--tokenizer",    type=Path, default=None,
+                        help="chemin tokenizer explicite (prioritaire sur --v2)")
     args = parser.parse_args()
 
     # Appliquer les overrides
@@ -162,7 +173,9 @@ if __name__ == "__main__":
         raise SystemExit(1)
 
     device = get_device()
-    model, tok = load_model(args.ckpt, device)
+    tok_path = args.tokenizer if args.tokenizer is not None \
+        else (TOKENIZER_PATH_V2 if args.v2 else TOKENIZER_PATH)
+    model, tok = load_model(args.ckpt, device, tok_path)
 
     # Guard anti-fabrication coranique (actif par défaut, désactivable)
     bad_ids = None if args.allow_quran else quran_frame_token_ids(tok)
