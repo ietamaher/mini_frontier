@@ -33,9 +33,10 @@ from config import (
     CHECKPOINT_DIR, LOG_DIR,
     get_device, get_autocast_ctx,
     VAL_EVAL_MIX, VAL_CAT_NAMES, val_cat_bin,
+    model_cfg_v2, VAL_EVAL_MIX_V2, TOKENIZER_PATH_V2, DATA_DIR,
 )
 from model import MiniFrontierLLM
-from data_pipeline import MemmapDataset, TRAIN_BIN, VAL_BIN, mask_for
+from data_pipeline import MemmapDataset, TRAIN_BIN, VAL_BIN, TRAIN_BIN_V2, VAL_BIN_V2, mask_for
 from tokenizer_arabic import ArabicTokenizer
 from config import TOKENIZER_PATH
 
@@ -159,12 +160,15 @@ def evaluate_categories(
     return out
 
 
-def weighted_val_loss(per_cat: dict, mix: dict = VAL_EVAL_MIX) -> float:
+def weighted_val_loss(per_cat: dict, mix: dict = None) -> float:
     """
-    Val loss pondérée par le MIX EFFECTIF d'entraînement (نحو 45%, أدب 22%…),
-    et non une moyenne plate par token. Les poids sont renormalisés sur les
-    catégories réellement présentes (عروض absent → somme < 1 → renorm).
+    Val loss pondérée par le MIX EFFECTIF d'entraînement, et non une moyenne plate
+    par token. Les poids sont renormalisés sur les catégories réellement présentes
+    (عروض absent → somme < 1 → renorm). mix=None → lit le global VAL_EVAL_MIX au
+    moment de l'appel (donc respecte le swap --v2).
     """
+    if mix is None:
+        mix = VAL_EVAL_MIX
     avail = {c: mix[c] for c in per_cat if c in mix}
     Z = sum(avail.values())
     if Z <= 0:
@@ -449,7 +453,19 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size",      type=int,   default=None)
     parser.add_argument("--block_size",      type=int,   default=None)
     parser.add_argument("--no_compile",      action="store_true")
+    parser.add_argument("--v2", action="store_true",
+                        help="Ḍād-v2 : Config C (tied) + bins/tokenizer/mix v2")
     args = parser.parse_args()
+
+    # Ḍād-v2 : bascule sur Config C + chemins/mix v2 (v1 intact)
+    if args.v2:
+        model_cfg = model_cfg_v2
+        TRAIN_BIN, VAL_BIN = TRAIN_BIN_V2, VAL_BIN_V2
+        VAL_EVAL_MIX = VAL_EVAL_MIX_V2
+        val_cat_bin  = lambda cat: DATA_DIR / f"val_cat{cat}_v2.bin"
+        TOKENIZER_PATH = TOKENIZER_PATH_V2
+        log.info(f"🅥2 MODE V2 — Config C (tied) {model_cfg.n_embd}d×{model_cfg.n_layer}L, "
+                 f"bins/tokenizer/mix v2")
 
     # Appliquer les overrides
     if args.lr         is not None: train_cfg.learning_rate       = args.lr
